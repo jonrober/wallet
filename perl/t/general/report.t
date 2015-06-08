@@ -11,7 +11,7 @@
 use strict;
 use warnings;
 
-use Test::More tests => 197;
+use Test::More tests => 219;
 
 use Wallet::Admin;
 use Wallet::Report;
@@ -40,6 +40,31 @@ my @acls = $report->acls;
 is (scalar (@acls), 1, 'One ACL in the database');
 is ($acls[0][0], 1, ' and that is ACL ID 1');
 is ($acls[0][1], 'ADMIN', ' with the right name');
+
+# Check to see that we have all types that we expect.
+my @types = $report->types;
+is (scalar (@types), 10, 'There are ten types created');
+is ($types[0][0], 'base', ' and the first member is correct');
+is ($types[1][0], 'duo', ' and the second member is correct');
+is ($types[2][0], 'duo-ldap', ' and the third member is correct');
+is ($types[3][0], 'duo-pam', ' and the fourth member is correct');
+is ($types[4][0], 'duo-radius', ' and the fifth member is correct');
+is ($types[5][0], 'duo-rdp', ' and the sixth member is correct');
+is ($types[6][0], 'file', ' and the seventh member is correct');
+is ($types[7][0], 'keytab', ' and the eighth member is correct');
+is ($types[8][0], 'password', ' and the nineth member is correct');
+is ($types[9][0], 'wa-keyring', ' and the tenth member is correct');
+
+# And that we have all schemes that we expect.
+my @schemes = $report->acl_schemes;
+is (scalar (@schemes), 7, 'There are seven acl schemes created');
+is ($schemes[0][0], 'base', ' and the first member is correct');
+is ($schemes[1][0], 'krb5', ' and the second member is correct');
+is ($schemes[2][0], 'krb5-regex', ' and the third member is correct');
+is ($schemes[3][0], 'ldap-attr', ' and the fourth member is correct');
+is ($schemes[4][0], 'nested', ' and the fifth member is correct');
+is ($schemes[5][0], 'netdb', ' and the sixth member is correct');
+is ($schemes[6][0], 'netdb-root', ' and the seventh member is correct');
 
 # Create an object.
 my $server = eval { Wallet::Server->new ('admin@EXAMPLE.COM', 'localhost') };
@@ -256,6 +281,22 @@ package main;
 is (scalar (@lines), 1, 'Searching for ACL naming violations finds one');
 is ($lines[0][0], 3, ' and the first has the right ID');
 is ($lines[0][1], 'second', ' and the right name');
+
+# Set a host-based object matching script so that we can test the host report.
+# The deactivation trick isn't needed here.
+package Wallet::Config;
+sub is_for_host {
+    my ($type, $name, $host) = @_;
+    my ($service, $principal) = split ('/', $name, 2);
+    return 0 unless $service && $principal;
+    return 1 if $host eq $principal;
+    return 0;
+}
+package main;
+@lines = $report->objects_hostname ('host', 'admin');
+is (scalar (@lines), 1, 'Searching for host-based objects finds one');
+is ($lines[0][0], 'base', ' and the first has the right type');
+is ($lines[0][1], 'service/admin', ' and the right name');
 
 # Set up a file bucket so that we can create an object we can retrieve.
 system ('rm -rf test-files') == 0 or die "cannot remove test-files\n";

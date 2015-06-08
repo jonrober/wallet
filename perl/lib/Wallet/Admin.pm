@@ -118,6 +118,7 @@ sub default_data {
                        [ 'krb5',       'Wallet::ACL::Krb5'            ],
                        [ 'krb5-regex', 'Wallet::ACL::Krb5::Regex'     ],
                        [ 'ldap-attr',  'Wallet::ACL::LDAP::Attribute' ],
+                       [ 'nested',     'Wallet::ACL::Nested'          ],
                        [ 'netdb',      'Wallet::ACL::NetDB'           ],
                        [ 'netdb-root', 'Wallet::ACL::NetDB::Root'     ],
                                                      ]);
@@ -126,11 +127,12 @@ sub default_data {
     # types default rows.
     my @record = ([ qw/ty_name ty_class/ ],
                [ 'duo',        'Wallet::Object::Duo' ],
-               [ 'duo-ldap',   'Wallet::Object::Duo::LDAPProxy' ],
-               [ 'duo-pam',    'Wallet::Object::Duo::PAM' ],
-               [ 'duo-radius', 'Wallet::Object::Duo::RadiusProxy' ],
-               [ 'duo-rdp',    'Wallet::Object::Duo::RDP' ],
+               [ 'duo-ldap',   'Wallet::Object::Duo' ],
+               [ 'duo-pam',    'Wallet::Object::Duo' ],
+               [ 'duo-radius', 'Wallet::Object::Duo' ],
+               [ 'duo-rdp',    'Wallet::Object::Duo' ],
                [ 'file',       'Wallet::Object::File' ],
+               [ 'password',   'Wallet::Object::Password' ],
                [ 'keytab',     'Wallet::Object::Keytab' ],
                [ 'wa-keyring', 'Wallet::Object::WAKeyring' ]);
     ($r1) = $self->{schema}->resultset('Type')->populate (\@record);

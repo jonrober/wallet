@@ -1,7 +1,7 @@
 # Wallet::ACL -- Implementation of ACLs in the wallet system.
 #
 # Written by Russ Allbery <eagle@eyrie.org>
-# Copyright 2007, 2008, 2010, 2013, 2014
+# Copyright 2007, 2008, 2010, 2013, 2014, 2015
 #     The Board of Trustees of the Leland Stanford Junior University
 #
 # See LICENSE for licensing terms.
@@ -17,13 +17,14 @@ use strict;
 use warnings;
 use vars qw($VERSION);
 
+use Wallet::Object::Base;
 use DateTime;
 use DBI;
 
 # This version should be increased on any code change to this module.  Always
 # use two digits for the minor version with a leading zero if necessary so
 # that it will sort properly.
-$VERSION = '0.08';
+$VERSION = '0.09';
 
 ##############################################################################
 # Constructors
@@ -197,13 +198,52 @@ sub rename {
         $acls->ac_name ($name);
         $acls->update;
         $self->log_acl ('rename', undef, undef, $user, $host, $time);
+
+        # Find any references to this being used as a nested verifier and
+        # update the name.  This really breaks out of the normal flow, but
+        # it's hard to do otherwise.
+        %search = (ae_scheme     => 'nested',
+                   ae_identifier => $self->{name},
+                  );
+        my @entries = $self->{schema}->resultset('AclEntry')->search(\%search);
+        for my $entry (@entries) {
+            $entry->ae_identifier ($name);
+            $entry->update;
+        }
+
         $guard->commit;
     };
     if ($@) {
-        $self->error ("cannot rename ACL $self->{id} to $name: $@");
+        $self->error ("cannot rename ACL $self->{name} to $name: $@");
         return;
     }
     $self->{name} = $name;
+    return 1;
+}
+
+# Moves everything owned by one ACL to instead be owned by another.  You'll
+# normally want to use rename, but this exists for cases where the replacing
+# ACL already exists and has things assigned to it.  Returns true on success,
+# false on failure.
+sub replace {
+    my ($self, $replace_id, $user, $host, $time) = @_;
+    $time ||= time;
+
+    my %search = (ob_owner => $self->{id});
+    my @objects = $self->{schema}->resultset('Object')->search (\%search);
+    if (@objects) {
+        for my $object (@objects) {
+            my $type   = $object->ob_type;
+            my $name   = $object->ob_name;
+            my $object = eval {
+                Wallet::Object::Base->new($type, $name, $self->{schema});
+            };
+            $object->owner ($replace_id, $user, $host, $time);
+        }
+    } else {
+        $self->error ("no objects found for ACL $self->{name}");
+        return;
+    }
     return 1;
 }
 
@@ -240,6 +280,17 @@ sub destroy {
             $entry->delete;
         }
 
+        # Find any references to this being used as a nested verifier and
+        # remove them.  This really breaks out of the normal flow, but it's
+        # hard to do otherwise.
+        %search = (ae_scheme     => 'nested',
+                   ae_identifier => $self->{name},
+                  );
+        @entries = $self->{schema}->resultset('AclEntry')->search(\%search);
+        for my $entry (@entries) {
+            $entry->delete;
+        }
+
         # There should definitely be an ACL record to delete.
         %search = (ac_id => $self->{id});
         my $entry = $self->{schema}->resultset('Acl')->find(\%search);
@@ -257,7 +308,7 @@ sub destroy {
         $guard->commit;
     };
     if ($@) {
-        $self->error ("cannot destroy ACL $self->{id}: $@");
+        $self->error ("cannot destroy ACL $self->{name}: $@");
         return;
     }
     return 1;
@@ -275,6 +326,18 @@ sub add {
         $self->error ("unknown ACL scheme $scheme");
         return;
     }
+
+    # Check to make sure that this entry has a valid name for the scheme.
+    my $class = $self->scheme_mapping ($scheme);
+    my $object = eval {
+        $class->new ($identifier, $self->{schema});
+    };
+    unless ($object && $object->syntax_check ($identifier)) {
+        $self->error ("invalid ACL identifier $identifier for $scheme");
+        return;
+    };
+
+    # Actually create the scheme.
     eval {
         my $guard = $self->{schema}->txn_scope_guard;
         my %record = (ae_id         => $self->{id},
@@ -285,7 +348,7 @@ sub add {
         $guard->commit;
     };
     if ($@) {
-        $self->error ("cannot add $scheme:$identifier to $self->{id}: $@");
+        $self->error ("cannot add $scheme:$identifier to $self->{name}: $@");
         return;
     }
     return 1;
@@ -312,7 +375,7 @@ sub remove {
     };
     if ($@) {
         my $entry = "$scheme:$identifier";
-        $self->error ("cannot remove $entry from $self->{id}: $@");
+        $self->error ("cannot remove $entry from $self->{name}: $@");
         return;
     }
     return 1;
@@ -340,7 +403,7 @@ sub list {
         $guard->commit;
     };
     if ($@) {
-        $self->error ("cannot retrieve ACL $self->{id}: $@");
+        $self->error ("cannot retrieve ACL $self->{name}: $@");
         return;
     } else {
         return @entries;
@@ -395,7 +458,7 @@ sub history {
         $guard->commit;
     };
     if ($@) {
-        $self->error ("cannot read history for $self->{id}: $@");
+        $self->error ("cannot read history for $self->{name}: $@");
         return;
     }
     return $output;
@@ -419,7 +482,7 @@ sub history {
                 push (@{ $self->{check_errors} }, "unknown scheme $scheme");
                 return;
             }
-            $verifier{$scheme} = $class->new;
+            $verifier{$scheme} = $class->new ($identifier, $self->{schema});
             unless (defined $verifier{$scheme}) {
                 push (@{ $self->{check_errors} }, "cannot verify $scheme");
                 return;
@@ -642,6 +705,14 @@ system-generated ACL IDs.  Returns true on success and false on failure.
 On failure, the caller should call error() to get the error message.
 
 Note that rename() operations are not logged in the ACL history.
+
+=item replace(ID)
+
+Replace this ACL with another.  This goes through each object owned by
+the ACL and changes its ownership to the new ACL, leaving this ACL owning
+nothing (and probably then needing to be deleted).  Returns true on
+success and false on failure.  On failure, the caller should call error()
+to get the error message.
 
 =item show()
 
